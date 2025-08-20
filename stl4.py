@@ -16,7 +16,7 @@ nltk.download('wordnet')
 nltk.download('omw-1.4')
 nltk.download('averaged_perceptron_tagger')
 
-st.title("NLP Lab 4")
+st.title("Lab4")
 
 question = st.sidebar.selectbox("Choose a question", [
     "Question 1: Positional Index",
@@ -254,6 +254,7 @@ elif question == "Question 5: POS Tagging using HMM":
     emission_counts = defaultdict(lambda: defaultdict(int))
     tag_counts = defaultdict(int)
 
+    # Count transitions and emissions
     for sentence in tagged_sentences:
         prev_tag = 'START'
         for word, tag in sentence:
@@ -264,13 +265,48 @@ elif question == "Question 5: POS Tagging using HMM":
             prev_tag = tag
         transition_counts[prev_tag]['END'] += 1
 
+    # Calculate probabilities with add-one smoothing
     def calc_prob(count_dict):
-        return {prev: {tag: count / sum(tags.values()) for tag, count in tags.items()}
-                for prev, tags in count_dict.items()}
+        prob_dict = {}
+        for prev, tags in count_dict.items():
+            total = sum(tags.values()) + len(tags)  # denominator with smoothing
+            prob_dict[prev] = {}
+            for tag, count in tags.items():
+                prob_dict[prev][tag] = (count + 1) / total
+        return prob_dict
 
     transition_prob = calc_prob(transition_counts)
     emission_prob = calc_prob(emission_counts)
     tags = list(tag_counts.keys())
+    tags_sorted = sorted(tags)
+
+    # Prepare Transition Probability Matrix DataFrame
+    all_prev_tags = sorted(set(transition_prob.keys()))
+    all_next_tags = sorted({tag for d in transition_prob.values() for tag in d.keys()})
+
+    trans_matrix = []
+    for prev in all_prev_tags:
+        row = []
+        for nxt in all_next_tags:
+            row.append(transition_prob.get(prev, {}).get(nxt, 0))
+        trans_matrix.append(row)
+
+    df_transition = pd.DataFrame(trans_matrix, index=all_prev_tags, columns=all_next_tags)
+    st.subheader("Transition Probability Matrix")
+    st.dataframe(df_transition.style.format("{:.4f}"))
+
+    # Prepare Emission Probability Matrix DataFrame
+    all_words = sorted({word for tag in emission_prob for word in emission_prob[tag].keys()})
+    emission_matrix = []
+    for tag in tags_sorted:
+        row = []
+        for word in all_words:
+            row.append(emission_prob.get(tag, {}).get(word, 0))
+        emission_matrix.append(row)
+
+    df_emission = pd.DataFrame(emission_matrix, index=tags_sorted, columns=all_words)
+    st.subheader("Emission Probability Matrix")
+    st.dataframe(df_emission.style.format("{:.4f}"))
 
     sentence = st.text_input("Enter sentence to tag", "The rat can chase the cat").lower().split()
 
@@ -278,45 +314,58 @@ elif question == "Question 5: POS Tagging using HMM":
         V = [{}]
         path = {}
 
+        # Initialize base cases (t == 0)
         for tag in tags:
-            trans_p = transition_prob['START'].get(tag, 0)
-            emit_p = emission_prob[tag].get(sentence[0], 0)
-            V[0][tag] = math.log(trans_p) + math.log(emit_p) if trans_p > 0 and emit_p > 0 else float('-inf')
-            path[tag] = [tag] if V[0][tag] != float('-inf') else []
+            trans_p = transition_prob.get('START', {}).get(tag, 1e-8)
+            emit_p = emission_prob.get(tag, {}).get(sentence[0], 1e-8)
+            V[0][tag] = math.log(trans_p) + math.log(emit_p)
+            path[tag] = [tag]
 
+        # Run Viterbi for t > 0
         for t in range(1, len(sentence)):
             V.append({})
             new_path = {}
+
             for curr_tag in tags:
-                best_prev_tag, max_prob = None, float('-inf')
+                max_prob = float('-inf')
+                best_prev_tag = None
+                emit_p = emission_prob.get(curr_tag, {}).get(sentence[t], 1e-8)
+
                 for prev_tag in tags:
-                    trans_p = transition_prob[prev_tag].get(curr_tag, 0)
-                    emit_p = emission_prob[curr_tag].get(sentence[t], 0)
-                    if trans_p > 0 and emit_p > 0 and V[t - 1][prev_tag] != float('-inf'):
-                        prob = V[t - 1][prev_tag] + math.log(trans_p) + math.log(emit_p)
-                        if prob > max_prob:
-                            max_prob = prob
-                            best_prev_tag = prev_tag
+                    trans_p = transition_prob.get(prev_tag, {}).get(curr_tag, 1e-8)
+                    prob = V[t-1][prev_tag] + math.log(trans_p) + math.log(emit_p)
+                    if prob > max_prob:
+                        max_prob = prob
+                        best_prev_tag = prev_tag
+
                 V[t][curr_tag] = max_prob
-                new_path[curr_tag] = path[best_prev_tag] + [curr_tag] if best_prev_tag else []
+                new_path[curr_tag] = path[best_prev_tag] + [curr_tag]
+
             path = new_path
 
+        # Termination step
         max_final_prob = float('-inf')
         best_final_tag = None
         for tag in tags:
-            trans_p = transition_prob[tag].get('END', 0)
-            if trans_p > 0 and V[-1][tag] != float('-inf'):
-                prob = V[-1][tag] + math.log(trans_p)
-                if prob > max_final_prob:
-                    max_final_prob = prob
-                    best_final_tag = tag
+            trans_p = transition_prob.get(tag, {}).get('END', 1e-8)
+            prob = V[-1][tag] + math.log(trans_p)
+            if prob > max_final_prob:
+                max_final_prob = prob
+                best_final_tag = tag
 
         return path[best_final_tag]
 
     if sentence:
-        result = viterbi(sentence)
-        st.write("Tagged:", list(zip(sentence, result)))
+        tagged_sequence = viterbi(sentence)
+        st.subheader("Tagged Sentence")
 
+        # Nicely formatted inline tagged sentence: word/POS
+        formatted_output = " ".join(f"{word}/{tag}" for word, tag in zip(sentence, tagged_sequence))
+        st.markdown(f"**{formatted_output}**")
+
+        # Optional table display (commented)
+        # df_tagged = pd.DataFrame({"Word": sentence, "POS Tag": tagged_sequence})
+        # st.table(df_tagged)
 # -----------------------------------
 elif question == "Question 6: Word Sense Disambiguation (Lesk)":
     st.header("Question 6: Word Sense Disambiguation (Lesk)")
